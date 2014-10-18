@@ -54,6 +54,7 @@ const NSString *CCShaderUniformSinTime = @"cc_SinTime";
 const NSString *CCShaderUniformCosTime = @"cc_CosTime";
 const NSString *CCShaderUniformRandom01 = @"cc_Random01";
 const NSString *CCShaderUniformMainTexture = @"cc_MainTexture";
+const NSString *CCShaderUniformNormalMapTexture = @"cc_NormalMapTexture";
 const NSString *CCShaderUniformAlphaTestValue = @"cc_AlphaTestValue";
 
 
@@ -79,6 +80,7 @@ static const GLchar *CCShaderHeader =
 	"uniform highp vec4 cc_CosTime;\n"
 	"uniform highp vec4 cc_Random01;\n\n"
 	"uniform " XSTR(CC_SHADER_COLOR_PRECISION) " sampler2D cc_MainTexture;\n\n"
+	"uniform " XSTR(CC_SHADER_COLOR_PRECISION) " sampler2D cc_NormalMapTexture;\n\n"
 	"varying " XSTR(CC_SHADER_COLOR_PRECISION) " vec4 cc_FragColor;\n"
 	"varying highp vec2 cc_FragTexCoord1;\n"
 	"varying highp vec2 cc_FragTexCoord2;\n\n"
@@ -449,6 +451,9 @@ static CCShader *CC_SHADER_POS_TEX_COLOR_ALPHA_TEST = nil;
 
 +(void)initialize
 {
+	// +initialize may be called due to loading a subclass.
+	if(self != [CCShader class]) return;
+	
 	CC_SHADER_CACHE = [[CCShaderCache alloc] init];
 	
 	// Setup the builtin shaders.

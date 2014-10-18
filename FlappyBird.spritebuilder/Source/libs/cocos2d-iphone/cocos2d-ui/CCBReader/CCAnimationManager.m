@@ -52,11 +52,6 @@ static NSInteger ccbAnimationManagerID = 0;
     _nodeSequences = [[NSMutableDictionary alloc] init];
     _baseValues = [[NSMutableDictionary alloc] init];
     
-    // Scheduler
-    _scheduler = [[CCDirector sharedDirector] scheduler];
-    [_scheduler scheduleTarget:self];
-    [_scheduler setPaused:NO target:self];
-    
     // Current Sequence Actions
     _currentActions = [[NSMutableArray alloc] init];
     _playbackSpeed  = 1.0f;
@@ -81,9 +76,16 @@ static NSInteger ccbAnimationManagerID = 0;
     }
 }
 
+-(void) onEnter {
+    // Setup Scheduler
+    _scheduler = [[CCDirector sharedDirector] scheduler];
+    [_scheduler scheduleTarget:self];
+    [_scheduler setPaused:NO target:self];
+}
+
 - (void)addNode:(CCNode*)node andSequences:(NSDictionary*)seq
 {
-#ifdef DEBUG
+#if DEBUG
 	//Sanity check sequences;
 	
 	for (NSMutableDictionary* seqNodeProps in seq.allValues) {
@@ -168,6 +170,10 @@ static NSInteger ccbAnimationManagerID = 0;
 
 - (CCActionInterval*)actionFromKeyframe0:(CCBKeyframe*)kf0 andKeyframe1:(CCBKeyframe*)kf1 propertyName:(NSString*)name node:(CCNode*)node {
     float duration = kf1.time - kf0.time;
+
+    if(kf0 && kf0.easingType==kCCBKeyframeEasingInstant) {
+        duration = 0;
+    }
     
     if ([name isEqualToString:@"rotation"]) {
         return [CCActionRotateTo actionWithDuration:duration angle:[kf1.value floatValue] simple:YES];
@@ -199,18 +205,18 @@ static NSInteger ccbAnimationManagerID = 0;
     } else if ([name isEqualToString:@"rotationalSkewY"]) {
         return [CCActionRotateTo actionWithDuration:duration angleY:[kf1.value floatValue]];
     } else if ([name isEqualToString:@"opacity"]) {
-        return [CCActionFadeTo actionWithDuration:duration opacity:[kf1.value intValue]];
+        return [CCActionFadeTo actionWithDuration:duration opacity:[kf1.value floatValue]];
     } else if ([name isEqualToString:@"color"]) {
         CCColor* color = kf1.value;
         return [CCActionTintTo actionWithDuration:duration color:color];
     } else if ([name isEqualToString:@"visible"]) {
         if ([kf1.value boolValue]) {
-            return [CCActionSequence actionOne:[CCActionDelay actionWithDuration:duration] two:[CCActionShow action]];
+            return [CCActionShow action];
         } else {
-            return [CCActionSequence actionOne:[CCActionDelay actionWithDuration:duration] two:[CCActionHide action]];
+            return [CCActionHide action];
         }
     } else if ([name isEqualToString:@"spriteFrame"]) {
-        return [CCActionSequence actionOne:[CCActionDelay actionWithDuration:duration] two:[CCActionSpriteFrame actionWithSpriteFrame:kf1.value]];
+        return [CCActionSpriteFrame actionWithSpriteFrame:kf1.value];
     } else {
         CCLOG(@"CCBReader: Failed to create animation for property: %@", name);
     }
@@ -252,6 +258,8 @@ static NSInteger ccbAnimationManagerID = 0;
         } else if ([name isEqualToString:@"skew"]) {
             node.skewX = [[value objectAtIndex:0] floatValue];
             node.skewY = [[value objectAtIndex:1] floatValue];
+        } else if ([name isEqualToString:@"visible"]) {
+            [(CCSprite*)node setVisible:[value boolValue]];
         } else if ([name isEqualToString:@"spriteFrame"]) {
             [(CCSprite*)node setSpriteFrame:value];
         } else {
@@ -491,7 +499,7 @@ static NSInteger ccbAnimationManagerID = 0;
         }
 		
         
-        if(_lastSequence.sequenceId!=seqId) {
+        if(_lastSequence.sequenceId!=seqId || _runningSequence.sequenceId!=seqId) {
             _loop = NO;
             
             // Reset the nodes that may have been changed by other timelines
@@ -502,18 +510,18 @@ static NSInteger ccbAnimationManagerID = 0;
                     
                     id value = [nodeBaseValues objectForKey:propName];
                     
-                    if (value) {
+                    if (value!=nil) {
                         [self setAnimatedProperty:propName forNode:node toValue:value tweenDuration:tweenDuration];
                     }
                 }
             }
+           
         }
         
-
         
     }
     
-    _paused = NO;
+	    _paused = NO;
 }
 
 - (void)runAnimationsForSequenceNamed:(NSString*)name tweenDuration:(float)tweenDuration {
@@ -844,6 +852,12 @@ static NSInteger ccbAnimationManagerID = 0;
         CCActionInterval* action = [self actionFromKeyframe0:startKF andKeyframe1:endKF propertyName:seqProp.name node:node];
         
         if (action) {
+            
+            // Instant
+            if(startKF.easingType==kCCBKeyframeEasingInstant) {
+                [actions addObject:[CCActionDelay actionWithDuration:endKF.time-startKF.time]];
+        }
+        
             // Apply Easing
             action = [self easeAction:action easingType:startKF.easingType easingOpt:startKF.easingOpt];
             [actions addObject:action];

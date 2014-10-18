@@ -43,23 +43,39 @@
 #endif
 
 
-@interface CCRenderTextureSprite : CCSprite @end
+@interface CCRenderTextureSprite : CCSprite
+
+@property (nonatomic, weak) CCRenderTexture *renderTexture;
+
+- (CGAffineTransform)nodeToWorldTransform;
+
+@end
+
 @implementation CCRenderTextureSprite
 
 -(CCRenderState *)renderState
 {
 	if(_renderState == nil){
-		if(_shaderUniforms.count > 1){
-			_renderState = [[CCRenderState alloc] initWithBlendMode:_blendMode shader:_shader shaderUniforms:_shaderUniforms];
-		} else {
-			// Creating a regular, cached render state here would be mildly bad.
-			// The state would prevent the render texture from being released until the cache is flushed.
-			NSDictionary *uniforms = @{CCShaderUniformMainTexture:(_texture ?: [CCTexture none])};
-			_renderState = [[CCRenderState alloc] initWithBlendMode:_blendMode shader:_shader shaderUniforms:uniforms];
-		}
+		// Allowing the uniforms to be copied speeds up the rendering by making the render state immutable.
+		// Copy the uniforms if custom uniforms are not being used.
+		BOOL copyUniforms = self.hasDefaultShaderUniforms;
+		
+		// Create an uncached renderstate so the texture can be released before the renderstate cache is flushed.
+		_renderState = [CCRenderState renderStateWithBlendMode:_blendMode shader:_shader shaderUniforms:self.shaderUniforms copyUniforms:copyUniforms];
 	}
 	
 	return _renderState;
+}
+
+- (CGAffineTransform)nodeToWorldTransform
+{
+	CGAffineTransform t = [self nodeToParentTransform];
+    
+	for (CCNode *p = _renderTexture; p != nil; p = p.parent)
+    {
+		t = CGAffineTransformConcat(t, [p nodeToParentTransform]);
+    }
+	return t;
 }
 
 @end
@@ -71,6 +87,7 @@
 @property (nonatomic, readonly) GLuint depthRenderBuffer;
 
 @end
+
 
 @implementation CCRenderTextureFBO
 
@@ -85,6 +102,7 @@
 }
 
 @end
+
 
 @implementation CCRenderTexture
 
@@ -133,13 +151,12 @@
 
 		_projection = GLKMatrix4MakeOrtho(0.0f, width, 0.0f, height, -1024.0f, 1024.0f);
 		
-		_sprite = [CCRenderTextureSprite spriteWithTexture:[CCTexture none]];
+        CCRenderTextureSprite *rtSprite = [CCRenderTextureSprite spriteWithTexture:[CCTexture none]];
+        rtSprite.renderTexture = self;
+        _sprite = rtSprite;
 
 		// Diabled by default.
 		_autoDraw = NO;
-		
-		// add sprite for backward compatibility
-		[self addChild:_sprite];
 	}
 	return self;
 }
@@ -152,12 +169,14 @@
 
 -(void)create
 {
+    CGSize pixelSize = CGSizeMake(_contentSize.width * _contentScale, _contentSize.height * _contentScale);
+    [self createTextureAndFboWithPixelSize:pixelSize];
+}
+
+-(void)createTextureAndFboWithPixelSize:(CGSize)pixelSize
+{
 	glPushGroupMarkerEXT(0, "CCRenderTexture: Create");
 	
-	int pixelW = _contentSize.width*_contentScale;
-	int pixelH = _contentSize.height*_contentScale;
-
-
 	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &_oldFBO);
 
 	// textures must be power of two
@@ -165,16 +184,16 @@
 	NSUInteger powH;
 
 	if( [[CCConfiguration sharedConfiguration] supportsNPOT] ) {
-		powW = pixelW;
-		powH = pixelH;
+		powW = pixelSize.width;
+		powH = pixelSize.height;
 	} else {
-		powW = CCNextPOT(pixelW);
-		powH = CCNextPOT(pixelH);
+		powW = CCNextPOT(pixelSize.width);
+		powH = CCNextPOT(pixelSize.height);
 	}
 
 	void *data = calloc(powW*powH, 4);
 
-	CCTexture *texture = [[CCTexture alloc] initWithData:data pixelFormat:_pixelFormat pixelsWide:powW pixelsHigh:powH contentSizeInPixels:CGSizeMake(pixelW, pixelH) contentScale:_contentScale];
+	CCTexture *texture = [[CCTexture alloc] initWithData:data pixelFormat:_pixelFormat pixelsWide:powW pixelsHigh:powH contentSizeInPixels:pixelSize contentScale:_contentScale];
     self.texture = texture;
     
 	free(data);
@@ -217,6 +236,10 @@
 	CC_CHECK_GL_ERROR_DEBUG();
 	glPopGroupMarkerEXT();
 	
+    // XXX Thayer says: I think this is incorrect for any situations where the content
+    // size type isn't (points, points). The call to setTextureRect below eventually arrives
+    // at some code that assumes the supplied size is in points so, if the size is not in points,
+    // things break.
 	CGRect rect = CGRectMake(0, 0, _contentSize.width, _contentSize.height);
 	
 	[self assignSpriteTexture];
@@ -382,13 +405,11 @@
 	if(!_visible) return;
 	
 	if(_autoDraw){
-        
-        if(_contentSizeChanged)
-        {
-            [self destroy];
-            _contentSizeChanged = NO;
-        }
-        
+		if(_contentSizeChanged){
+			[self destroy];
+			_contentSizeChanged = NO;
+		}
+		
 		[self begin];
 		NSAssert(_renderer == renderer, @"CCRenderTexture error!");
 		
@@ -398,16 +419,27 @@
 		[self sortAllChildren];
 		
 		for(CCNode *child in _children){
-			if( child != _sprite) [child visit:renderer parentTransform:&_projection];
+			[child visit:renderer parentTransform:&_projection];
 		}
 		
 		[self end];
+		
+		GLKMatrix4 transform = [self transform:parentTransform];
+		[self draw:renderer transform:&transform];
+	} else {
+		// Render normally, v3.0 and earlier skipped this.
+		[super visit:renderer parentTransform:parentTransform];
 	}
 	
-	GLKMatrix4 transform = [self transform:parentTransform];
-	[_sprite visit:renderer parentTransform:&transform];
-	
 	_orderOfArrival = 0;
+}
+
+-(void)draw:(CCRenderer *)renderer transform:(const GLKMatrix4 *)transform
+{
+	NSAssert(_sprite.zOrder == 0, @"Changing the sprite's zOrder is not supported.");
+	
+	// Force the sprite to render itself.
+	[_sprite visit:renderer parentTransform:transform];
 }
 
 #pragma mark RenderTexture - Save Image
@@ -592,7 +624,11 @@
     // TODO: Fix CCRenderTexture so that it correctly handles this
 	// NSAssert(NO, @"You cannot change the content size of an already created CCRenderTexture. Recreate it");
     [super setContentSize:size];
-    _projection = GLKMatrix4MakeOrtho(0.0f, size.width, size.height, 0.0f, -1024.0f, 1024.0f);
+    
+    // XXX Thayer says: I'm pretty sure this is broken since the supplied content size could
+    // be normalized, in points, in UI points, etc. We should get the size in points then convert
+    // to pixels and use that to make the ortho matrix.
+	_projection = GLKMatrix4MakeOrtho(0.0f, size.width, 0.0f, size.height, -1024.0f, 1024.0f);
     _contentSizeChanged = YES;
 
 }
