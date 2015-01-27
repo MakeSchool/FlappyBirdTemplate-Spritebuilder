@@ -234,6 +234,7 @@ NotAffectedByGravity
 	cpBodySetVelocityUpdateFunc(self.body.body, func);
 	
 	_affectedByGravity = affectedByGravity;
+	[_body activate];
 }
 
 -(BOOL)allowsRotation {
@@ -272,6 +273,12 @@ static cpBodyType ToChipmunkBodyType[] = {CP_BODY_TYPE_DYNAMIC, CP_BODY_TYPE_KIN
 		// Chipmunk body type cannot be changed from within a callback, need to make this safe.
 		[space addPostStepBlock:^{_body.type = ToChipmunkBodyType[type];} key:self];
 	} else {
+		
+		if(self.type != type && self.type == CCPhysicsBodyTypeKinematic)
+		{
+			[self.node.physicsNode.kineticNodes removeObject:self.node];
+		}
+		
 		_body.type = ToChipmunkBodyType[type];
 	}
 }
@@ -361,6 +368,24 @@ CCPhysicsBodyUpdatePosition(cpBody *body, cpFloat dt)
 }
 
 -(BOOL)sleeping {return _body.isSleeping;}
+-(void)setSleeping:(BOOL)sleep
+{
+	if(_body.type != CP_BODY_TYPE_DYNAMIC){
+		CCLOGWARN(@"Warning: [CCPhysicsBody setSleeping:] has no effect on static bodies.");
+		return;
+	}
+	
+	if(_body.space == nil){
+		CCLOGWARN(@"Warning: [CCPhysicsBody setSleeping:] has no effect on bodies before they are added to a scene.");
+		return;
+	}
+	
+	if(sleep){
+		[_body sleep];
+	} else {
+		[_body activate];
+	}
+}
 
 @end
 

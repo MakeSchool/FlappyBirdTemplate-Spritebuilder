@@ -38,7 +38,7 @@
 #import "Support/CGPointExtension.h"
 #import "Support/CCProfiling.h"
 #import "CCNode_Private.h"
-#import "CCRenderer_private.h"
+#import "CCRenderer_Private.h"
 #import "CCSprite_Private.h"
 #import "CCTexture_Private.h"
 
@@ -517,7 +517,7 @@
                           } mutableCopy];
     
     // And then copy the new effect's uniforms into the node's uniforms dictionary.
-    [_shaderUniforms addEntriesFromDictionary:_effect.shaderUniforms];
+    [_shaderUniforms addEntriesFromDictionary:_effect.effectImpl.shaderUniforms];
 }
 
 @end

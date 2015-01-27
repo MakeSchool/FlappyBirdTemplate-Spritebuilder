@@ -26,32 +26,11 @@
 #import <Foundation/Foundation.h>
 #import "CCRenderer.h"
 #import "CCCache.h"
-
-// TODO These should be made private to the module.
-extern id CCBLENDMODE_CACHE;
-extern id CCRENDERSTATE_CACHE;
+#import "CCRenderDispatch.h"
+#import "CCRendererBasicTypes_Private.h"
 
 /// Options dictionary for the disabled blending mode.
 extern NSDictionary *CCBLEND_DISABLED_OPTIONS;
-
-
-/// Internal type used to abstract GPU buffers. (vertex, index buffers, etc)
-typedef struct CCGraphicsBuffer {
-	/// Elements currently in the buffer.
-	size_t count;
-	/// Element capacity of the buffer.
-	size_t capacity;
-	/// Size in bytes of elements in the buffer.
-	size_t elementSize;
-	
-	/// Pointer to the buffer memory.
-	void *ptr;
-	
-	/// Used to store GL VBO name for now.
-	intptr_t data;
-	/// GL_ARRAY_BUFFER, GL_ELEMENT_ARRAY_BUFFER, etc.
-	intptr_t type;
-} CCGraphicsBuffer;
 
 
 /**
@@ -82,62 +61,67 @@ typedef struct CCGraphicsBuffer {
 	NSDictionary *_options;
 }
 
-@end
-
-
-@interface CCRenderState(){
-	@private
-	CCTexture *_mainTexture;
-	BOOL _immutable;
-	
-	@public
-	CCBlendMode *_blendMode;
-	CCShader *_shader;
-	NSDictionary *_shaderUniforms;
-}
+/// Remove unused blend modes from the internal cache.
++(void)flushCache;
 
 @end
+
+
+typedef NS_ENUM(NSUInteger, CCRenderCommandDrawMode){
+	CCRenderCommandDrawTriangles,
+	CCRenderCommandDrawLines,
+	// TODO more?
+};
 
 
 @interface CCRenderCommandDraw : NSObject<CCRenderCommand> {
 	@public
-	GLenum _mode;
+	CCRenderCommandDrawMode _mode;
 	CCRenderState *_renderState;
 	NSInteger _globalSortOrder;
+	
+	NSUInteger _firstIndex, _vertexPage;
+	size_t _count;
 }
 
-@property(nonatomic, readonly) GLint first;
-@property(nonatomic, readonly) GLsizei elements;
+@property(nonatomic, readonly) NSUInteger first;
+@property(nonatomic, readonly) size_t count;
 
--(instancetype)initWithMode:(GLenum)mode renderState:(CCRenderState *)renderState first:(GLint)first elements:(GLsizei)elements globalSortOrder:(NSInteger)globalSortOrder;
+-(instancetype)initWithMode:(CCRenderCommandDrawMode)mode renderState:(CCRenderState *)renderState firstIndex:(NSUInteger)firstIndex vertexPage:(NSUInteger)vertexPage count:(size_t)count globalSortOrder:(NSInteger)globalSortOrder;
 
--(void)batchElements:(GLsizei)elements;
+-(void)batch:(NSUInteger)count;
 
 @end
 
 
 @interface CCRenderer(){
-	GLuint _vao;
-	CCGraphicsBuffer _vertexBuffer;
-	CCGraphicsBuffer _elementBuffer;
+	@public
+	CCGraphicsBufferBindings *_buffers;
+	
+	CCFrameBufferObject *_framebuffer;
 	
 	NSDictionary *_globalShaderUniforms;
+	NSDictionary *_globalShaderUniformBufferOffsets;
 	
 	NSMutableArray *_queue;
 	NSMutableArray *_queueStack;
 	
+	// Handle clearing specially if it's the very first command.
+	GLbitfield _clearMask;
+	GLKVector4 _clearColor;
+	GLclampf _clearDepth;
+	GLint _clearStencil;
+	
 	// Current renderer bindings for fast state checking.
 	// Invalidated at the end of each frame.
 	__unsafe_unretained CCRenderState *_renderState;
-	__unsafe_unretained NSDictionary *_blendOptions;
-	__unsafe_unretained CCShader *_shader;
-	__unsafe_unretained NSDictionary *_shaderUniforms;
 	__unsafe_unretained CCRenderCommandDraw *_lastDrawCommand;
-	BOOL _vaoBound;
+	BOOL _buffersBound;
+	NSUInteger _vertexPageBound;
 }
 
 /// Current global shader uniform values.
-@property(nonatomic, copy) NSDictionary *globalShaderUniforms;
+@property(nonatomic, readonly) NSDictionary *globalShaderUniforms;
 
 /// Retrieve the current renderer for the current thread.
 +(instancetype)currentRenderer;
@@ -151,39 +135,36 @@ typedef struct CCGraphicsBuffer {
 /// Render any currently queued commands.
 -(void)flush;
 
-/// Bind the renderer's VAO if it is not currently bound.
--(void)bindVAO:(BOOL)bind;
-
-/// Resize the capacity of a graphics buffer.
--(void)resizeBuffer:(struct CCGraphicsBuffer *)buffer capacity:(size_t)capacity;
-
 @end
 
 
 @interface CCRenderer(NoARCPrivate)
 
+-(void)prepareWithProjection:(const GLKMatrix4 *)projection framebuffer:(CCFrameBufferObject *)framebuffer;
+
 -(void)setRenderState:(CCRenderState *)renderState;
+
+/// Bind the renderer's VAO if it is not currently bound.
+-(void)bindBuffers:(BOOL)bind vertexPage:(NSUInteger)vertexPage;
 
 @end
 
 
-/// Return a pointer to an array of elements that is 'requestedCount' in size.
-/// The buffer is resized by calling [CCRenderer resizeBuffer:] if necessary.
-static inline void *
-CCGraphicsBufferPushElements(CCGraphicsBuffer *buffer, size_t requestedCount, CCRenderer *renderer)
-{
-	NSCAssert(requestedCount > 0, @"Requested count must be positive.");
-	
-	size_t required = buffer->count + requestedCount;
-	size_t capacity = buffer->capacity;
-	if(required > capacity){
-		// Why 1.5? https://github.com/facebook/folly/blob/master/folly/docs/FBVector.md
-		[renderer resizeBuffer:buffer capacity:required*1.5];
-	}
-	
-	void *array = buffer->ptr + buffer->count*buffer->elementSize;
-	buffer->count += requestedCount;
-	
-	return array;
-}
+// Cross-graphics API debug helpers.
+// Should these be made public to replace the existing GL ones?
 
+#if DEBUG
+
+void CCRENDERER_DEBUG_PUSH_GROUP_MARKER(NSString *label);
+void CCRENDERER_DEBUG_POP_GROUP_MARKER(void);
+void CCRENDERER_DEBUG_INSERT_EVENT_MARKER(NSString *label);
+void CCRENDERER_DEBUG_CHECK_ERRORS(void);
+
+#else
+
+#define CCRENDERER_DEBUG_PUSH_GROUP_MARKER(__label__);
+#define CCRENDERER_DEBUG_POP_GROUP_MARKER();
+#define CCRENDERER_DEBUG_INSERT_EVENT_MARKER(__label__);
+#define CCRENDERER_DEBUG_CHECK_ERRORS();
+
+#endif
